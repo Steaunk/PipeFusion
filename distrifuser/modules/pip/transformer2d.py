@@ -21,6 +21,8 @@ class DistriTransformer2DModel(BaseModule):
     def __init__(self, module: Transformer2DModel, distri_config: DistriConfig):
         super().__init__(module, distri_config)
         self.config = module.config
+        self.master_node = 0
+        self.cuda_graphs = None
 
 
     def pip_forward(
@@ -52,19 +54,30 @@ class DistriTransformer2DModel(BaseModule):
         send_req = None
         recv_req = None
 
-        if dist.get_rank() > 0: 
+        next_master_node = (self.master_node - 1 + distri_config.world_size) % distri_config.world_size
+        
+        logger.info(f"rank: {distri_config.rank}, master_node: {self.master_node}, next_master_node: {next_master_node}")
+
+        if distri_config.rank != self.master_node: 
             hidden_states[0] = hidden_states[0].contiguous()
-            recv_req = torch.distributed.irecv(hidden_states[0], src=distri_config.rank - 1)
+            recv_req = torch.distributed.irecv(
+                hidden_states[0], 
+                src=(distri_config.rank - 1 + distri_config.world_size) % distri_config.world_size
+            )
 
         # filling the pipeline
 
         for idx in range(num_micro_batch):
-            if distri_config.rank > 0:
+            if distri_config.rank != self.master_node:
                 if not recv_req.is_completed():
                     recv_req.wait()
                 if idx < num_micro_batch - 1:
                     hidden_states[idx+1] = hidden_states[idx+1].contiguous()
-                    recv_req = torch.distributed.irecv(hidden_states[idx+1], src=distri_config.rank - 1)
+                    recv_req = torch.distributed.irecv(
+                        hidden_states[idx+1], 
+                        src=(distri_config.rank - 1 + distri_config.world_size) % distri_config.world_size
+                    )
+            
             for block_idx in range(start_idx, end_idx):
                 block = module.transformer_blocks[block_idx]
                 hidden_states[idx] = block(
@@ -80,27 +93,27 @@ class DistriTransformer2DModel(BaseModule):
             if send_req is not None and not send_req.is_completed():
                 send_req.wait()
             
-            if distri_config.rank < distri_config.world_size - 1:
+            if distri_config.rank != next_master_node:
                 send_req = torch.distributed.isend(
                     hidden_states[idx], 
-                    dst=distri_config.rank + 1)
-            else:
-                torch.distributed.isend(
-                    hidden_states[idx], 
-                    dst=0,
-                    group=distri_config.groups[idx])
+                    dst=(distri_config.rank + 1) % distri_config.world_size)
+            # else:
+            #     torch.distributed.isend(
+            #         hidden_states[idx], 
+            #         dst=0,
+            #         group=distri_config.groups[idx])
 
-            if distri_config.rank == 0:
-                async_handle.append(
-                    torch.distributed.irecv(
-                        hidden_states[idx], 
-                        src=distri_config.world_size - 1,
-                        group=distri_config.groups[idx]))
-        if distri_config.rank == 0:
-            for handle in async_handle:
-                if not handle.is_completed():
-                    handle.wait()
-
+        #     if distri_config.rank == 0:
+        #         async_handle.append(
+        #             torch.distributed.irecv(
+        #                 hidden_states[idx], 
+        #                 src=distri_config.world_size - 1,
+        #                 group=distri_config.groups[idx]))
+        # if distri_config.rank == 0:
+        #     for handle in async_handle:
+        #         if not handle.is_completed():
+        #             handle.wait()
+        self.master_node = next_master_node
         hidden_states = torch.cat(hidden_states, dim=1)
         return hidden_states
 
