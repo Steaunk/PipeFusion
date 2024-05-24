@@ -5,7 +5,7 @@
 ***Facing Sora Era, still investing in NVLink and high-bandwidth networks for Serving long-sequence Diffusion Models? With PipeFusion, PCIe and Ethernet is enough!***
 
 The project provides a suite of efficient parallel inference appoaches for Diffusion Models.
-The backend networks of the diffusion model primarily include U-Net and Transfors (DiT). Both of these can be applied to DiT, and some methods can also be used for U-Net.
+The backend networks of the diffusion model primarily include U-Net and Transformers (DiT). Both of these can be applied to DiT, and some methods can also be used for U-Net.
 
 1. Tensor Parallelism. (DiT, U-Net)
 2. Sequence Parallelism, including Ulysses and Ring Attention: (DiT)
@@ -49,7 +49,7 @@ Best Practices:
 1. PipeFusion is the best on both memory and communication efficiency. It dose not need high inter-GPU bandwidth, like NVLink. Therefore, it is lowest on latency for PCIe cluster. However, on NVLink, the power of PipeFusion is weakened.
 2. DistriFusion is fast on NVLink at cost of large overall memory cost using, and threfore has OOM for high resolution images.
 3. PipeFusion and Tensor parallelism is able to generate high resolution images due to their spliting on both parameter and activations. Tensor parallelism is fast on NVLink, while PipeFusion is fast on PCIe. 
-4. Sequence Parallelism usually fast than tensor parallelis, but has OOM for 
+4. Sequence Parallelism usually fast than tensor parallelism, but has OOM for 
 high resolution images.
 
 
