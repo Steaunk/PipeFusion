@@ -1,7 +1,7 @@
 import argparse
 import torch
 
-from pipefuser.pipelines.pixartalpha import DistriPixArtAlphaPipeline
+from pipefuser.pipelines.sd3 import DistriSD3Pipeline
 from pipefuser.utils import DistriConfig
 from torch.profiler import profile, record_function, ProfilerActivity
 from pipefuser.modules.conv.conv_chunk.chunk_conv2d import PatchConv2d
@@ -21,7 +21,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model_id",
-        default="PixArt-alpha/PixArt-XL-2-1024-MS",
+        default="stabilityai/stable-diffusion-3-medium-diffusers",
         type=str,
         help="Path to the pretrained model.",
     )
@@ -56,7 +56,7 @@ def main():
     parser.add_argument(
         "--num_inference_steps",
         type=int,
-        default=20,
+        default=28,
     )
     parser.add_argument(
         "--pp_num_patch", type=int, default=2, help="patch number in pipefusion."
@@ -80,11 +80,6 @@ def main():
     parser.add_argument(
         "--ulysses_degree",
         type=int,
-        default=0,
-    )
-    parser.add_argument(
-        "--pipefusion_warmup_step",
-        type=int,
         default=1,
     )
     parser.add_argument(
@@ -92,22 +87,22 @@ def main():
         type=int,
         default=1,
     )
-    parser.add_argument(
-        "--use_use_ulysses_low",
-        action="store_true",
-    )
+    # parser.add_argument(
+    #     "--use_use_ulysses_low",
+    #     action="store_true",
+    # )
     parser.add_argument(
         "--use_profiler",
         action="store_true",
     )
-    parser.add_argument(
-        "--use_cuda_graph",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--use_parallel_vae",
-        action="store_true",
-    )
+    # parser.add_argument(
+    #     "--use_cuda_graph",
+    #     action="store_true",
+    # )
+    # parser.add_argument(
+    #     "--use_parallel_vae",
+    #     action="store_true",
+    # )
     parser.add_argument(
         "--output_type",
         type=str,
@@ -119,9 +114,9 @@ def main():
     parser.add_argument(
         "--scheduler",
         "-s",
-        default="dpm-solver",
+        default="FM-ED",
         type=str,
-        choices=["dpm-solver", "ddim"],
+        choices=["dpm-solver", "ddim", "FM-ED"],
         help="Scheduler to use.",
     )
 
@@ -137,42 +132,35 @@ def main():
     # torch.backends.cudnn.benchmark=True
     torch.backends.cudnn.deterministic = True
 
-    enable_parallel_vae = args.use_parallel_vae
-    if args.height >= 4096:
-        enable_parallel_vae = True
-
     # for DiT the height and width are fixed according to the model
     distri_config = DistriConfig(
         height=args.height,
         width=args.width,
         warmup_steps=args.pipefusion_warmup_step,
-        do_classifier_free_guidance=True,
         split_batch=False,
         parallelism=args.parallelism,
         mode=args.sync_mode,
         pp_num_patch=args.pp_num_patch,
-        use_resolution_binning=not args.no_use_resolution_binning,
-        use_cuda_graph=args.use_cuda_graph,
         attn_num=args.attn_num,
         scheduler=args.scheduler,
-        ulysses_degree=args.ulysses_degree,
     )
 
-    pipeline = DistriPixArtAlphaPipeline.from_pretrained(
+    pipeline = DistriSD3Pipeline.from_pretrained(
         distri_config=distri_config,
         pretrained_model_name_or_path=args.model_id,
-        enable_parallel_vae=enable_parallel_vae,
         # variant="fp16",
         # use_safetensors=True,
     )
 
+    if args.output_type == "pil":
+        print("Patching Conv2d")
+        PatchConv2d(1024)(pipeline.pipeline)
     pipeline.set_progress_bar_config(disable=distri_config.rank != 0)
     # warmup
     output = pipeline(
         prompt=args.prompt,
         generator=torch.Generator(device="cuda").manual_seed(42),
         output_type=args.output_type,
-        num_inference_steps=args.pipefusion_warmup_step + 1,
     )
 
     torch.cuda.reset_peak_memory_stats()
