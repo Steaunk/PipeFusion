@@ -8,6 +8,7 @@ from torch import nn
 from torch import Tensor
 from torch.nn import functional as F
 from torch.nn.common_types import _size_2_t
+from ..conv_chunk.chunk_conv2d import ChunkConv2d
 
 import logging
 
@@ -44,6 +45,7 @@ class PatchParallelismConv2d(nn.Conv2d):
         previous_group=None,
         next_group=None,
         order_idx: int = 0,
+        chunk_size=None,
     ) -> None:
         super().__init__(
             in_channels,
@@ -61,6 +63,25 @@ class PatchParallelismConv2d(nn.Conv2d):
         self.previous_group = previous_group
         self.next_group = next_group
         self.order_idx = order_idx
+        self.chunk_size = chunk_size
+        self.conv = None
+        if self.chunk_size:
+            self.conv = ChunkConv2d(
+                in_channels,
+                out_channels,
+                kernel_size,
+                stride,
+                0,
+                dilation,
+                groups,
+                bias,
+                "zeros",
+                self.weight.device,
+                self.weight.dtype,
+                self.chunk_size,
+            )
+            self.conv.weight.data = self.weight.data
+            self.conv.bias.data = self.bias.data
 
     # for the even
     def even_calc_send_start(self, end, kernel_size, stride):
@@ -155,6 +176,8 @@ class PatchParallelismConv2d(nn.Conv2d):
             inner_input = F.pad(input, copy_padding, mode=self.padding_mode)
 
         if world_size == 1:
+            if self.conv:
+                return self.conv(inner_input)
             return F.conv2d(
                 inner_input,
                 weight,
@@ -241,6 +264,8 @@ class PatchParallelismConv2d(nn.Conv2d):
             # even: rank0 -> rank1 -> ... -> rank-n
             if previous_recv_tensor is not None:
                 inner_input = torch.cat([previous_recv_tensor, inner_input], dim=2)
+            if self.conv:
+                return self.conv(inner_input)
             return F.conv2d(
                 inner_input, weight, bias, self.stride, 0, self.dilation, self.groups
             )
@@ -252,6 +277,8 @@ class PatchParallelismConv2d(nn.Conv2d):
                 inner_input = inner_input[:, :, (cur_start - pre_end) :, :]
             if next_recv_tensor is not None:
                 inner_input = torch.cat([inner_input, next_recv_tensor], dim=2)
+            if self.conv:
+                return self.conv(inner_input)
             return F.conv2d(
                 inner_input, weight, bias, self.stride, 0, self.dilation, self.groups
             )
@@ -274,6 +301,7 @@ class PatchParallelismConv2dFirst(PatchParallelismConv2d):
         padding_mode: str = "zeros",
         device=None,
         dtype=None,
+        chunk_size=None,
     ) -> None:
         super().__init__(
             in_channels,
@@ -287,6 +315,7 @@ class PatchParallelismConv2dFirst(PatchParallelismConv2d):
             padding_mode,
             device,
             dtype,
+            chunk_size=chunk_size,
         )
 
     def _conv_forward(
@@ -300,6 +329,8 @@ class PatchParallelismConv2dFirst(PatchParallelismConv2d):
         _, _, h, w = inner_input.shape
         world_size, rank = self.get_world_size_and_rank()
         if world_size == 1:
+            if self.conv:
+                return self.conv(inner_input)
             return F.conv2d(
                 inner_input,
                 weight,
@@ -336,7 +367,8 @@ class PatchParallelismConv2dFirst(PatchParallelismConv2d):
 
         if rank > 0:
             start_h = self.odd_correct_start(start_h, stride_h)
-
+        if self.conv:
+            return self.conv(inner_input[:, :, start_h:end_h, :])
         return F.conv2d(
             inner_input[:, :, start_h:end_h, :],
             weight,
