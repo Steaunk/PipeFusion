@@ -404,6 +404,7 @@ class PatchParallelismConv2dLast(PatchParallelismConv2d):
         previous_group=None,
         next_group=None,
         order_idx: int = 0,
+        chunk_size=None,
     ) -> None:
         super().__init__(
             in_channels,
@@ -417,6 +418,7 @@ class PatchParallelismConv2dLast(PatchParallelismConv2d):
             padding_mode,
             device,
             dtype,
+            chunk_size=chunk_size,
         )
         self.previous_group = previous_group
         self.next_group = next_group
