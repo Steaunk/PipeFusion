@@ -135,6 +135,7 @@ def main():
         attn_num=args.attn_num,
         scheduler=args.scheduler,
         ulysses_degree=args.ulysses_degree,
+        batch_size=2
     )
 
     pipeline = DistriPixArtAlphaPipeline.from_pretrained(
@@ -145,15 +146,13 @@ def main():
     )
 
     pipeline.set_progress_bar_config(disable=distri_config.rank != 0)
-    # warmup
     output = pipeline(
-        prompt=args.prompt,
+        prompt=["An astronaut riding a green horse", "An astronaut riding a red horse"],
         generator=torch.Generator(device="cuda").manual_seed(42),
         output_type=args.output_type,
-        num_inference_steps=args.pipefusion_warmup_step + 1,
+        num_inference_steps=args.num_inference_steps
     )
 
-    torch.cuda.reset_peak_memory_stats()
 
     if args.parallelism == "pipefusion":
         case_name = f"{args.parallelism}_hw_{args.height}_sync_{args.sync_mode}_u{args.ulysses_degree}_w{distri_config.world_size}_mb{args.pp_num_patch}_warm{args.pipefusion_warmup_step}"
@@ -164,63 +163,11 @@ def main():
     if enable_parallel_vae:
         case_name += "_patchvae"
 
-    if args.use_profiler:
-        start_time = time.time()
-        with profile(
-            activities=[
-                ProfilerActivity.CPU,
-                ProfilerActivity.CUDA
-            ],
-            on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                f"./profile/{case_name}"
-            ),
-            profile_memory=True,
-            with_stack=True,
-            record_shapes=True,
-        ) as prof:
-            output = pipeline(
-                prompt=args.prompt,
-                generator=torch.Generator(device="cuda").manual_seed(42),
-                num_inference_steps=args.num_inference_steps,
-                output_type=args.output_type,
-            )
-        # if distri_config.rank == 0:
-        #     prof.export_memory_timeline(
-        #         f"{distri_config.mode}_{args.height}_{distri_config.world_size}_mem.html"
-        #     )
-        end_time = time.time()
-    else:
-        # MAX_NUM_OF_MEM_EVENTS_PER_SNAPSHOT = 100000
-        # torch.cuda.memory._record_memory_history(
-        #     max_entries=MAX_NUM_OF_MEM_EVENTS_PER_SNAPSHOT
-        # )
-        start_time = time.time()
-        output = pipeline(
-            prompt=args.prompt,
-            generator=torch.Generator(device="cuda").manual_seed(42),
-            num_inference_steps=args.num_inference_steps,
-            output_type=args.output_type,
-        )
-
-        end_time = time.time()
-        # torch.cuda.memory._dump_snapshot(
-        #     f"{distri_config.mode}_{distri_config.world_size}.pickle"
-        # )
-        torch.cuda.memory._record_memory_history(enabled=None)
-
-    elapsed_time = end_time - start_time
-
-    peak_memory = torch.cuda.max_memory_allocated(device="cuda")
-
     if distri_config.rank == 0:
-
-        print(
-            f"{case_name} epoch time: {elapsed_time:.2f} sec, memory: {peak_memory/1e9} GB"
-        )
         if args.output_type == "pil":
-            print(f"save images to ./results/{case_name}.png")
-            output.images[0].save(f"./results/{case_name}.png")
-
+            for i in range(len(output.images)):
+                print(f"save images to ./results/{case_name}_{i}.png")
+                output.images[i].save(f"./results/{case_name}_{i}.png")
 
 if __name__ == "__main__":
     main()
